@@ -4,10 +4,9 @@
 #include <iostream>
 #include <mutex>
 #include <shared_mutex>
-#include <string>
 #include <initializer_list>
-#include <forward_list>
 #include <thread>
+#include <tuple>
 
 template<typename T>
 struct Node{
@@ -39,51 +38,33 @@ public:
 
     Concurrent_List(const std::initializer_list<value_type>& _ilist) : head{std::make_unique<Node<value_type>>()} {
         for(auto elem : _ilist){
-            add_node_back(elem);
+            push_back(elem);
         }
     }
 
-    Concurrent_List(std::size_t count, const value_type& value){
+    Concurrent_List(std::size_t count, const value_type& value) : head{std::make_unique<Node<value_type>>()} {
         for(int i=0; i<count; i++){
-            add_node_back(value);
+            push_back(value);
         }
     }
 
     Concurrent_List(std::size_t count) : Concurrent_List(count, value_type()){}
 
     Concurrent_List(const Concurrent_List& list){
-        std::unique_lock srclk_head{list.headmtx};
-        std::unique_lock srclk_tail{list.tailmtx};
-
         auto node = list.head.get();
         for(Node<value_type>* curr = node; curr != nullptr; curr = curr->next.get())
-            add_node_back(curr->data);
-
+            push_back(curr->data);
     }
 
 
-    void add_node_front(const value_type& data){
+    void push_front(const value_type& data){
         std::unique_ptr<Node<value_type>> node_ptr = std::make_unique<Node<value_type>>(data);
         std::unique_lock headlk {head->shmtx};
         node_ptr->next = std::move(head);
         head = std::move(node_ptr);
-
-        /*if(head.get() != tail){
-            taillk.unlock();
-            node_ptr->next = std::move(head);
-            head = std::move(node_ptr);
-        }
-        else if(!head){
-            head = std::move(node_ptr);
-            tail = head.get();
-        }
-        else{
-            node_ptr->next = std::move(head);
-            head = std::move(node_ptr);
-        }*/
     }
 
-    void add_node_back(const value_type& data){
+    void push_back(const value_type& data){
         std::unique_ptr<Node<value_type>> node_ptr = std::make_unique<Node<value_type>>();
         std::unique_lock prevlk {head->shmtx};
         auto curr_ptr = head.get();
@@ -95,24 +76,9 @@ public:
         }
         curr_ptr->data = data;
         curr_ptr->next = std::move(node_ptr);
-
-
-        /*if(head.get() != tail){
-            headlk.unlock();
-            tail->next = std::move(node_ptr);
-            tail = tail->next.get();
-        }
-        else if(!head){
-            head = std::move(node_ptr);
-            tail = head.get();
-        }
-        else{
-            tail->next = std::move(node_ptr);
-            tail = tail->next.get();
-        }*/
     }
 
-    void add_node_after(int pos, const value_type& data){
+    void insert_after(int pos, const value_type& data){
         std::unique_ptr<Node<value_type>> node_ptr = std::make_unique<Node<value_type>>(data);
         std::unique_lock lock{head->shmtx};
         auto curr_ptr = head.get();
@@ -130,10 +96,10 @@ public:
         curr_ptr->next = std::move(node_ptr);
     }
 
-    void delete_node_front(){
+    void pop_front(){
         std::unique_lock head_lk{head->shmtx};
         if(head->next == nullptr)
-            return;
+            throw std::runtime_error("pop_front() called on an empty list");
         std::unique_lock head_next_lk{head->next->shmtx};
         head_lk.unlock();
         std::unique_ptr<Node<value_type>> old_head = std::move(head);
@@ -141,79 +107,39 @@ public:
         old_head.reset(nullptr);
     }
 
-    /*void delete_node_back(){
-        std::unique_lock headlk{head->shmtx};
-        if(head->next == nullptr)
-            return;
-
-        std::unique_lock prev_lk{head->next->shmtx};
-        Node<value_type>* curr_ptr = head->next.get();
-        if(curr_ptr->next == nullptr){
-            //std::unique_ptr<Node<value_type>> n = std::move(curr_ptr);
-            prev_lk.unlock();
-            head->next.reset(nullptr);
-        }
-        else{
-            headlk.unlock();
-            std::unique_lock curr_lock{curr_ptr->next->shmtx, std::defer_lock};
-            while(curr_ptr->next->next != nullptr){
-                curr_lock.lock();
-                prev_lk.unlock();
-                curr_ptr = curr_ptr->next.get();
-                prev_lk = std::move(curr_lock);
-                curr_lock = std::move(std::unique_lock(curr_ptr->next->shmtx, std::defer_lock));
-            }
-            //std::lock_guard lock_next{curr_ptr->next->shmtx};
-            //std::unique_ptr<Node<value_type>> n = std::move(curr_ptr->next);
-            curr_ptr->data = value_type();
-            curr_ptr->next.reset(nullptr);
-            //curr_ptr->next = nullptr;
-
-        }
-
-        // while(curr_ptr->next->next != nullptr){
-        //     curr_ptr = curr_ptr->next;
-        // }
-        // std::unique_lock curr_lock{curr_ptr->shmtx};
-        // std::unique_lock tail_lock{curr_ptr->next->shmtx};
-
-        // std::unique_ptr<Node<value_type>> n = std::move(curr_ptr->next);
-        // curr_ptr->next = nullptr;
-
-        // else if(ptr == tail){
-        //     head.reset(nullptr);
-        //     tail = nullptr;
-        // }
-        // else{
-        //     while(ptr->next.get() != tail){
-        //         ptr = ptr->next.get();
-        //         if(headlk)
-        //             headlk.unlock();
-        //     }
-        //     ptr->next.reset(nullptr);
-        //     tail = ptr;
-        // }
-    }*/
-
-
-    void delete_node_back(){
+    void pop_back(){
         std::unique_lock prev_lk{head->shmtx};
         if(head->next == nullptr)
-            return;
+            throw std::runtime_error("pop_back() called on an empty list");
         Node<value_type>* curr_ptr = head.get();
-        //std::unique_lock curr_lock{curr_ptr->next->shmtx, std::defer_lock};
         while(curr_ptr->next->next != nullptr){
-            std::unique_lock curr_lock{curr_ptr->next->shmtx, std::defer_lock};
-            curr_lock.lock();
+            std::unique_lock curr_lock{curr_ptr->next->shmtx};
             prev_lk.unlock();
             curr_ptr = curr_ptr->next.get();
             prev_lk = std::move(curr_lock);
-            //curr_lock = std::move(std::unique_lock(curr_ptr->next->shmtx, std::defer_lock));
         }
         curr_ptr->data = value_type();
         curr_ptr->next.reset(nullptr);
     }
 
+    void remove_after(int pos){
+
+        std::unique_lock prev_lk{head->shmtx};
+        if(head->next == nullptr)
+            throw std::runtime_error("remove_after() called on an empty list");
+        int curr_pos = 0;
+        auto curr_ptr = head.get();
+        while(curr_pos < pos && curr_ptr->next != nullptr){
+            std::unique_lock curr_lock{curr_ptr->next->shmtx};
+            prev_lk.unlock();
+            curr_ptr = curr_ptr->next.get();
+            prev_lk = std::move(curr_lock);
+            curr_pos++;
+        }
+        std::unique_lock next_lock{curr_ptr->next->next->shmtx};
+        auto old_node = std::move(curr_ptr->next);
+        curr_ptr->next = std::move(old_node->next);
+    }
 
     std::size_t size(){
         std::unique_lock headlk{headmtx};
@@ -236,7 +162,7 @@ public:
 //        std::lock_guard taillk{tailmtx};
 
         Node<value_type>* ptr = head.get();
-        for(Node<value_type>* curr=ptr; curr != nullptr; curr=curr->next.get()){
+        for(Node<value_type>* curr=ptr; curr->next != nullptr; curr=curr->next.get()){
             std::cout << curr->data << "\t";
             if(headlk)
                 headlk.unlock();
@@ -245,26 +171,29 @@ public:
     }
 
     value_type front() const{
-        std::lock_guard headlk{headmtx};
-        if(!head)
+        std::lock_guard headlk{head->shmtx};
+        if(head->next == nullptr)
             throw std::runtime_error("front() called on an empty list");
-        return head.get()->data;
+        return head->data;
     }
 
-  /*  value_type back() const{
-        std::lock_guard taillk{tailmtx};
-        if(!tail)
+    value_type back() const{
+        std::unique_lock lock{head->shmtx};
+        if(head->next == nullptr)
             throw std::runtime_error("back() called on an empty list");
-        return tail->data;
-    }*/
+        auto curr_ptr = head.get();
+        while(curr_ptr->next->next != nullptr){
+            std::unique_lock curr_lock{curr_ptr->next->shmtx};
+            curr_ptr = curr_ptr->next.get();
+            lock.unlock();
+            lock = std::move(curr_lock);
+        }
+        return curr_ptr->data;
+    }
 
     ~Concurrent_List(){
     }
 };
-
-
-
-
 
 
 #endif // CONCURRENT_LIST2_HPP
