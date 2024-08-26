@@ -25,7 +25,6 @@ class Concurrent_List
 private:
 
     std::unique_ptr<Node<T>> head;
-    mutable std::mutex headmtx;
 
     using value_type = T;
     using reference = value_type&;
@@ -37,7 +36,7 @@ public:
     Concurrent_List() : head{std::make_unique<Node<value_type>>()} {}
 
     Concurrent_List(const std::initializer_list<value_type>& _ilist) : head{std::make_unique<Node<value_type>>()} {
-        for(auto elem : _ilist){
+        for(const_reference elem : _ilist){
             push_back(elem);
         }
     }
@@ -64,6 +63,26 @@ public:
         head = std::move(node_ptr);
     }
 
+    bool push_front(const value_type& data, const std::size_t time_ms){
+        std::unique_lock headlk {head->shmtx, std::chrono::milliseconds(time_ms)};
+        if(!headlk)
+            return false;
+        std::unique_ptr<Node<value_type>> node_ptr = std::make_unique<Node<value_type>>(data);
+        node_ptr->next = std::move(head);
+        head = std::move(node_ptr);
+        return true;
+    }
+
+    bool try_push_front(const value_type& data){
+        std::unique_lock headlk {head->shmtx, std::try_to_lock};
+        if(!headlk)
+            return false;
+        std::unique_ptr<Node<value_type>> node_ptr = std::make_unique<Node<value_type>>(data);
+        node_ptr->next = std::move(head);
+        head = std::move(node_ptr);
+        return true;
+    }
+
     void push_back(const value_type& data){
         std::unique_ptr<Node<value_type>> node_ptr = std::make_unique<Node<value_type>>();
         std::unique_lock prevlk {head->shmtx};
@@ -76,6 +95,44 @@ public:
         }
         curr_ptr->data = data;
         curr_ptr->next = std::move(node_ptr);
+    }
+
+    bool push_back(const value_type& data, const std::size_t time_ms){
+        std::unique_lock prevlk {head->shmtx, std::chrono::milliseconds(time_ms)};
+        if(!prevlk)
+            return false;
+        std::unique_ptr<Node<value_type>> node_ptr = std::make_unique<Node<value_type>>();
+        auto curr_ptr = head.get();
+        while(curr_ptr->next != nullptr){
+            std::unique_lock curr_lock{curr_ptr->next->shmtx, std::chrono::milliseconds(time_ms)};
+            if(!curr_lock)
+                return false;
+            curr_ptr = curr_ptr->next.get();
+            prevlk.unlock();
+            prevlk = std::move(curr_lock);
+        }
+        curr_ptr->data = data;
+        curr_ptr->next = std::move(node_ptr);
+        return true;
+    }
+
+    bool try_push_back(const value_type& data){
+        std::unique_lock prevlk {head->shmtx, std::try_to_lock};
+        if(!prevlk)
+            return false;
+        std::unique_ptr<Node<value_type>> node_ptr = std::make_unique<Node<value_type>>();
+        auto curr_ptr = head.get();
+        while(curr_ptr->next != nullptr){
+            std::unique_lock curr_lock{curr_ptr->next->shmtx, std::try_to_lock};
+            if(!curr_lock)
+                return false;
+            curr_ptr = curr_ptr->next.get();
+            prevlk.unlock();
+            prevlk = std::move(curr_lock);
+        }
+        curr_ptr->data = data;
+        curr_ptr->next = std::move(node_ptr);
+        return true;
     }
 
     void insert_after(int pos, const value_type& data){
@@ -141,26 +198,10 @@ public:
         curr_ptr->next = std::move(old_node->next);
     }
 
-    std::size_t size(){
-        std::unique_lock headlk{headmtx};
-        //std::unique_lock taillk{tailmtx};
-        int count = 0;
-        Node<value_type>* ptr = head.get();
-        for(Node<value_type>* curr = ptr; curr != nullptr; curr = curr->next.get())
-            count++;
-        return count;
-    }
-
-    bool empty(){
-        return !size();
-    }
-
 
     void print(){
 
-        std::unique_lock headlk{headmtx};
-//        std::lock_guard taillk{tailmtx};
-
+        std::unique_lock headlk{head->shmtx};
         Node<value_type>* ptr = head.get();
         for(Node<value_type>* curr=ptr; curr->next != nullptr; curr=curr->next.get()){
             std::cout << curr->data << "\t";
