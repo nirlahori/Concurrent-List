@@ -9,7 +9,9 @@ The functionality is implemented using synchronization primitives such as mutexe
 The Concurrent List achieves the concurrent functionality by locking adjacent nodes of the node on which the operation is to be 
 performed. For an instance, if the 19th node from the list is to be removed then the container will lock the node 18 and node 20.
 This ensures that no other thread is performing an operation which involves node 18 or 20. The node 19 can be safely deattached from
-the list and the remaining adjacent nodes can be safely repointed to each other.
+the list and the remaining adjacent nodes can be safely repointed to each other. 
+
+Fine Grained Locking is the another name of this locking strategy.
 
 The List is currently under active development and as such I am continously trying to improve the implementation while also trying
 to increase the capabilities of the container.
